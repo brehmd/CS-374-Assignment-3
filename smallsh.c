@@ -42,6 +42,8 @@ int main () {
 
 
 void print_cl(struct CommandLine* cl){
+    if(cl == NULL){return;}
+
     printf("--------------------------------------\n");
     printf("cl->command: %s\n", cl->command);
 
@@ -96,8 +98,6 @@ void free_cl(struct CommandLine* cl){
 
 
 struct CommandLine* create_cl(){
-    struct CommandLine* cl = malloc(sizeof(struct CommandLine));
-
     char user_entry[2048];
     printf("\n: ");
     fgets(user_entry, sizeof(user_entry), stdin);
@@ -106,6 +106,8 @@ struct CommandLine* create_cl(){
     if (strcmp(user_entry, "") == 0 || user_entry[0] == '#'){
         return NULL;
     }
+
+    struct CommandLine* cl = malloc(sizeof(struct CommandLine));
 
     char* token = strtok(user_entry, " ");
 
