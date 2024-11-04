@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 struct CommandLine{
     char* command;
@@ -18,7 +19,7 @@ struct CommandLine{
 };
 
 struct CommandLine* create_cl(); //1. Provide a prompt for running commands | 2. Handle blank lines and comments, which are lines beginning with the # character
-// char* var_expand(char*); //3. Provide expansion for the variable $$
+void var_expand(char**); //3. Provide expansion for the variable $$
 // void built_in_exit(); //4. Execute 3 commands exit, cd, and status via code built into the shell
 // void build_in_cd(); //4. Execute 3 commands exit, cd, and status via code built into the shell
 // void build_in_status(); //4. Execute 3 commands exit, cd, and status via code built into the shell
@@ -31,11 +32,11 @@ void free_cl(struct CommandLine*);
 
 
 int main () {
+
     struct CommandLine* cl = create_cl();
-
     print_cl(cl);
-
     free_cl(cl);
+    
 
     return 0;
 }
@@ -96,7 +97,6 @@ void free_cl(struct CommandLine* cl){
     return;
 }
 
-
 struct CommandLine* create_cl(){
     char user_entry[2048];
     printf("\n: ");
@@ -107,9 +107,14 @@ struct CommandLine* create_cl(){
         return NULL;
     }
 
+    char* p_entry = user_entry;
+
+    var_expand(&p_entry);
+    // printf("p_entry: %s\n", p_entry);
+
     struct CommandLine* cl = malloc(sizeof(struct CommandLine));
 
-    char* token = strtok(user_entry, " ");
+    char* token = strtok(p_entry, " ");
 
     cl->command = calloc(strlen(token) +1, sizeof(char));
     strcpy(cl->command, token);
@@ -150,5 +155,62 @@ struct CommandLine* create_cl(){
     }
     else{cl->is_background = 0;}
 
+    free(p_entry);
+
     return cl;
+}
+
+
+void var_expand(char** string){
+    const char *target = "$$";
+
+    char proc_id[10];
+    sprintf(proc_id, "%d", getpid());
+    const char *replacement = proc_id;
+
+    char *pos;
+    int target_len = strlen(target);
+    int replacement_len = strlen(replacement);
+    
+    // Count occurrences of target in str
+    int count = 0;
+    char *temp = *string;
+    while ((temp = strstr(temp, target)) != NULL) {
+        count++;
+        temp += target_len; // Move past the last found occurrence
+    }
+
+    // If no occurrences found, return the original string
+    if (count == 0) {
+        return;
+    }
+
+    // Allocate memory for the new string
+    char *result = malloc(strlen(*string) + count * (replacement_len - target_len) + 1);
+    if (!result) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return;
+    }
+
+    char *current = result;
+    while ((pos = strstr(*string, target)) != NULL) {
+        // Copy the part before target
+        int len = pos - *string;
+        strncpy(current, *string, len);
+        current += len;
+
+        // Copy the replacement
+        strcpy(current, replacement);
+        current += replacement_len;
+
+        // Move past the target in the original string
+        *string = pos + target_len;
+    }
+
+    // Copy the remaining part of the original string
+    strcpy(current, *string);
+
+    // Replace the original string with the new string
+    strcpy(*string, result);
+    *string = result; // Update the original pointer
 }
