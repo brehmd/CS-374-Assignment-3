@@ -21,9 +21,9 @@ struct CommandLine{
 struct CommandLine* create_cl(); //1. Provide a prompt for running commands | 2. Handle blank lines and comments, which are lines beginning with the # character
 void var_expand(char**); //3. Provide expansion for the variable $$
 // void built_in_exit(); //4. Execute 3 commands exit, cd, and status via code built into the shell
-// void build_in_cd(); //4. Execute 3 commands exit, cd, and status via code built into the shell
-// void build_in_status(); //4. Execute 3 commands exit, cd, and status via code built into the shell
-// void other_commands(struct CommandLine*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
+void built_in_cd(); //4. Execute 3 commands exit, cd, and status via code built into the shell
+void built_in_status(); //4. Execute 3 commands exit, cd, and status via code built into the shell
+void other_commands(struct CommandLine*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
 // void change_input(struct CommandLine*); //6. Support input and output redirection
 // void change_output(struct CommandLine*); //6. Support input and output redirection
 // static void sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
@@ -33,14 +33,36 @@ void free_cl(struct CommandLine*);
 
 int main () {
 
-    struct CommandLine* cl = create_cl();
-    print_cl(cl);
-    free_cl(cl);
+    int keep_running = 1;
+    while(keep_running){
+        struct CommandLine* cl = create_cl();
+        // print_cl(cl);
+
+        if (cl == NULL){
+            continue;
+        }
+
+        // more code
+        if (strcmp(cl->command, "exit") == 0){
+            keep_running = 0;
+        }
+        else if (strcmp(cl->command, "cd") == 0){
+            built_in_cd();
+        }
+        else if (strcmp(cl->command, "status") == 0){
+            built_in_status();
+        }
+        else{
+            other_commands(cl);
+        }
+
+        free_cl(cl);
+    }
+    
     
 
     return 0;
 }
-
 
 void print_cl(struct CommandLine* cl){
     if(cl == NULL){return;}
@@ -99,7 +121,7 @@ void free_cl(struct CommandLine* cl){
 
 struct CommandLine* create_cl(){
     char user_entry[2048];
-    printf("\n: ");
+    printf(": ");
     fgets(user_entry, sizeof(user_entry), stdin);
     user_entry[strcspn(user_entry, "\n")] = 0;
 
@@ -155,11 +177,12 @@ struct CommandLine* create_cl(){
     }
     else{cl->is_background = 0;}
 
-    free(p_entry);
+    if (strcmp(p_entry, user_entry)){
+        free(p_entry);
+    }
 
     return cl;
 }
-
 
 void var_expand(char** string){
     const char *target = "$$";
@@ -214,3 +237,19 @@ void var_expand(char** string){
     strcpy(*string, result);
     *string = result; // Update the original pointer
 }
+
+
+void built_in_cd(){
+    printf("ran built_in_cd\n");
+}
+
+
+void built_in_status(){
+    printf("ran built_in_status\n");
+}
+
+
+void other_commands(struct CommandLine* cl){
+    printf("ran other_commands\n");
+}
+
