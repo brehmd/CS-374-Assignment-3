@@ -21,11 +21,10 @@ struct CommandLine{
 struct CommandLine* create_cl(); //1. Provide a prompt for running commands | 2. Handle blank lines and comments, which are lines beginning with the # character
 void var_expand(char**); //3. Provide expansion for the variable $$
 // void built_in_exit(); //4. Execute 3 commands exit, cd, and status via code built into the shell
-void built_in_cd(); //4. Execute 3 commands exit, cd, and status via code built into the shell
-void built_in_status(); //4. Execute 3 commands exit, cd, and status via code built into the shell
-void other_commands(struct CommandLine*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
-// void change_input(struct CommandLine*); //6. Support input and output redirection
-// void change_output(struct CommandLine*); //6. Support input and output redirection
+void built_in_cd(struct CommandLine*); //4. Execute 3 commands exit, cd, and status via code built into the shell
+void built_in_status(int*); //4. Execute 3 commands exit, cd, and status via code built into the shell
+void other_commands(struct CommandLine*, int*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
+// void change_io(struct CommandLine*); //6. Support input and output redirection
 // static void sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
 void print_cl(struct CommandLine*);
 void free_cl(struct CommandLine*);
@@ -33,6 +32,7 @@ void free_cl(struct CommandLine*);
 
 int main () {
 
+    int last_exit_status = -1;
     int keep_running = 1;
     while(keep_running){
         struct CommandLine* cl = create_cl();
@@ -47,13 +47,13 @@ int main () {
             keep_running = 0;
         }
         else if (strcmp(cl->command, "cd") == 0){
-            built_in_cd();
+            built_in_cd(cl);
         }
         else if (strcmp(cl->command, "status") == 0){
-            built_in_status();
+            built_in_status(&last_exit_status);
         }
         else{
-            other_commands(cl);
+            other_commands(cl, &last_exit_status);
         }
 
         free_cl(cl);
@@ -239,17 +239,35 @@ void var_expand(char** string){
 }
 
 
-void built_in_cd(){
-    printf("ran built_in_cd\n");
+void built_in_cd(struct CommandLine* cl){
+    // printf("running built_in_cd\n");
+    if (cl->num_args){
+        if (chdir(cl->arguments[0]) == -1){
+            printf("ERROR - %s is not a valid path name\n", cl->arguments[0]);
+        }
+    }
+    else{
+        if (chdir(getenv("HOME")) == -1){
+            printf("ERROR - cannot cd HOME\n");
+        }
+    }
+    char cwd[1024];
+    // getcwd(cwd, sizeof(cwd));
+    // printf("Check cwd: %s\n", cwd);
+    // printf("ran built_in_cd\n");
 }
 
 
-void built_in_status(){
+void built_in_status(int* last_exit_status){
+    printf("running built_in_status\n");
+    // code goes here
     printf("ran built_in_status\n");
 }
 
 
-void other_commands(struct CommandLine* cl){
+void other_commands(struct CommandLine* cl, int* last_exit_status){
+    printf("running other_commands\n");
+    // code goes here
     printf("ran other_commands\n");
 }
 
