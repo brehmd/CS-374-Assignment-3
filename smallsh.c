@@ -1,7 +1,11 @@
+#include <sys/wait.h>
+#include <sys/types.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+int LAST_EXIT_STATUS = 0;
 
 struct CommandLine{
     char* command;
@@ -23,8 +27,8 @@ void var_expand(char**); //3. Provide expansion for the variable $$
 // void built_in_exit(); //4. Execute 3 commands exit, cd, and status via code built into the shell
 void built_in_cd(struct CommandLine*); //4. Execute 3 commands exit, cd, and status via code built into the shell
 void built_in_status(int); //4. Execute 3 commands exit, cd, and status via code built into the shell
-void other_commands(struct CommandLine*, int*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
-// void change_io(struct CommandLine*); //6. Support input and output redirection
+void other_commands(struct CommandLine*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
+void change_io(struct CommandLine*); //6. Support input and output redirection
 // static void sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
 void print_cl(struct CommandLine*);
 void free_cl(struct CommandLine*);
@@ -32,7 +36,7 @@ void free_cl(struct CommandLine*);
 
 int main () {
 
-    int last_exit_status = 0;
+    // int last_exit_status = 0; // this should be a global variable
     int keep_running = 1;
     while(keep_running){
         struct CommandLine* cl = create_cl();
@@ -50,10 +54,10 @@ int main () {
             built_in_cd(cl);
         }
         else if (strcmp(cl->command, "status") == 0){
-            built_in_status(last_exit_status);
+            built_in_status(LAST_EXIT_STATUS);
         }
         else{
-            other_commands(cl, &last_exit_status);
+            other_commands(cl);
         }
 
         free_cl(cl);
@@ -260,14 +264,84 @@ void built_in_cd(struct CommandLine* cl){
 
 void built_in_status(int status){
     // printf("running built_in_status\n");
+
+    // run some if statements to handle different status codes
+
     printf("exit value %d\n", status);
     // printf("ran built_in_status\n");
 }
 
 
-void other_commands(struct CommandLine* cl, int* last_exit_status){
+void other_commands(struct CommandLine* cl){
     printf("running other_commands\n");
-    // code goes here
+
+    // check background and foreground
+    // if background set io to /dev/null
+    // io_change
+
+    // new arguments list
+    char** newargs = (char**)calloc(cl->num_args + 2, sizeof(char*));
+
+    newargs[0] = (char*)malloc((strlen(cl->command) + 1) * sizeof(char));
+    strcpy(newargs[0], cl->command);
+    for(int i = 1; i <= cl->num_args; i++){
+        newargs[i] = (char*)malloc((strlen(cl->arguments[i-1]) + 1) * sizeof(char));
+        strcpy(newargs[i], cl->arguments[i-1]);
+        // printf("newargs[%d]: %s", i, newargs[i]);
+    }
+    newargs[cl->num_args + 1] = NULL;
+
+    for(int i = 0; i <= cl->num_args + 1; i++){
+        printf("  newargs[%d] = %s\n", i, newargs[i]);
+    }
+
+    // // fork()
+    int childStatus;
+
+    pid_t spawnPid = fork();
+
+    switch(spawnPid){
+        case -1:
+            perror("failure to fork()\n");
+            LAST_EXIT_STATUS = 1;
+            exit(1); // is exit valid here?
+            break;
+        case 0:
+            printf("Child Process %d is running\n", getpid());
+            
+            // execvp()
+            execvp(cl->command, newargs);
+
+            perror("failure to execvp()");
+            LAST_EXIT_STATUS = 1;
+
+            for(int i = 0; i <= cl->num_args + 1; i++){
+                free(newargs[i]);
+            }
+            free(newargs);
+            free_cl(cl);
+            exit(2);
+            break;
+
+        default:
+            printf("Parent Process %d is running\n", getpid());
+            spawnPid = waitpid(spawnPid, &childStatus, 0);
+            printf("back to the parent process %d\n", getpid());
+            LAST_EXIT_STATUS = childStatus;
+
+            for(int i = 0; i <= cl->num_args + 1; i++){
+                free(newargs[i]);
+            }
+            free(newargs);
+            // exit(0);
+            break;
+    }
+    
+    // if background print pid and parent return to prompt without waiting
+    
+    // if foreground update last_exit_status
+    // kill child
+
     printf("ran other_commands\n");
 }
 
