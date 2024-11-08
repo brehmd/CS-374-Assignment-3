@@ -4,8 +4,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
 
 int LAST_EXIT_STATUS = 0;
+int FG_MODE = 0;
+
+struct BackgroundArray{
+    pid_t* pids;
+    int size;
+    int capacity;
+};
 
 struct CommandLine{
     char* command;
@@ -23,22 +32,56 @@ struct CommandLine{
 };
 
 struct CommandLine* create_cl(); //1. Provide a prompt for running commands | 2. Handle blank lines and comments, which are lines beginning with the # character
+struct BackgroundArray* create_bga();
+void add_pid(struct BackgroundArray*, pid_t);
+void rm_pid(struct BackgroundArray*, pid_t);
+void free_bga(struct BackgroundArray*);
 void var_expand(char**); //3. Provide expansion for the variable $$
-// void built_in_exit(); //4. Execute 3 commands exit, cd, and status via code built into the shell
+void built_in_exit(struct BackgroundArray*); //4. Execute 3 commands exit, cd, and status via code built into the shell
 void built_in_cd(struct CommandLine*); //4. Execute 3 commands exit, cd, and status via code built into the shell
 void built_in_status(int); //4. Execute 3 commands exit, cd, and status via code built into the shell
-void other_commands(struct CommandLine*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
-void change_io(struct CommandLine*); //6. Support input and output redirection
-// static void sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
+void other_commands(struct CommandLine*, struct BackgroundArray*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
+int change_io(char*, char*); //6. Support input and output redirection
+static void sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
 void print_cl(struct CommandLine*);
 void free_cl(struct CommandLine*);
 
-
 int main () {
+
+    // set up signal handler
+
+    // initialize bg_array
+    struct BackgroundArray* bga = create_bga();
 
     // int last_exit_status = 0; // this should be a global variable
     int keep_running = 1;
     while(keep_running){
+
+
+        // check array of all background PIDs
+        // https://stackoverflow.com/questions/4200373/just-check-status-process-in-c
+        for (int i = 0; i < bga->capacity; i++){
+            if (bga->pids[i] == 0){
+                continue;
+            }
+
+            int status;
+            pid_t return_pid = waitpid(bga->pids[i], &status, WNOHANG); /* WNOHANG def'd in wait.h */
+        
+            if (return_pid == -1) {
+                perror("Failure to check PID\n");
+            }
+            else if (return_pid == 0) {
+                continue;
+            }
+            else if (return_pid == bga->pids[i]) {
+                printf("background pid %d is done: exit value %d\n", bga->pids[i], status);
+                rm_pid(bga, bga->pids[i]);
+                
+                // free memory of newargs
+            }
+        }
+
         struct CommandLine* cl = create_cl();
         // print_cl(cl);
 
@@ -48,6 +91,7 @@ int main () {
 
         // more code
         if (strcmp(cl->command, "exit") == 0){
+            built_in_exit(bga);
             keep_running = 0;
         }
         else if (strcmp(cl->command, "cd") == 0){
@@ -57,16 +101,64 @@ int main () {
             built_in_status(LAST_EXIT_STATUS);
         }
         else{
-            other_commands(cl);
+            other_commands(cl, bga);
         }
 
         free_cl(cl);
     }
-    
-    
+
+    free_bga(bga);
 
     return 0;
 }
+
+struct BackgroundArray* create_bga(){
+    struct BackgroundArray* bga = malloc(sizeof(struct BackgroundArray));
+    bga->pids = calloc(3, sizeof(pid_t));
+    bga->capacity = 3;
+    bga->size = 0;
+    return bga;
+}
+
+
+
+void add_pid(struct BackgroundArray* bga, pid_t pid){
+    if (bga->size == bga->capacity){
+        bga->capacity *= 2;
+        bga->pids = realloc(bga->pids, bga->capacity * sizeof(pid_t));
+        for(int k = bga->size; k < bga->capacity; k++){
+            bga->pids[k] = 0;
+        }
+    }
+    for(int i = 0; i < bga->capacity; i++){
+        if (bga->pids[i] == 0){
+            bga->size++;
+            bga->pids[i] = pid;
+            return;
+        }
+    }
+    return;
+}
+
+void rm_pid(struct BackgroundArray* bga, pid_t pid){
+    for(int i = 0; i < bga->capacity; i++){
+        if (bga->pids[i] == pid){
+            bga->size--;
+            bga->pids[i] = 0;
+            return;
+        }
+    }
+    return;
+}
+
+void free_bga(struct BackgroundArray* bga){
+    free(bga->pids);
+    bga->pids = NULL;
+    free(bga);
+    bga = NULL;
+    return;
+}
+
 
 void print_cl(struct CommandLine* cl){
     if(cl == NULL){return;}
@@ -243,6 +335,19 @@ void var_expand(char** string){
 }
 
 
+void built_in_exit(struct BackgroundArray* bga){
+    // terminate all children
+    for (int i = 0; i < bga->capacity; i++){
+        if (bga->pids[i] == 0){
+            continue;
+        }
+        kill(bga->pids[i], SIGKILL);
+        bga->pids[i] = 0;
+    }
+    return;
+}
+
+
 void built_in_cd(struct CommandLine* cl){
     // printf("running built_in_cd\n");
     if (cl->num_args){
@@ -272,12 +377,10 @@ void built_in_status(int status){
 }
 
 
-void other_commands(struct CommandLine* cl){
-    printf("running other_commands\n");
+void other_commands(struct CommandLine* cl, struct BackgroundArray* bga){
+    // printf("running other_commands\n");
 
     // check background and foreground
-    // if background set io to /dev/null
-    // io_change
 
     // new arguments list
     char** newargs = (char**)calloc(cl->num_args + 2, sizeof(char*));
@@ -287,15 +390,14 @@ void other_commands(struct CommandLine* cl){
     for(int i = 1; i <= cl->num_args; i++){
         newargs[i] = (char*)malloc((strlen(cl->arguments[i-1]) + 1) * sizeof(char));
         strcpy(newargs[i], cl->arguments[i-1]);
-        // printf("newargs[%d]: %s", i, newargs[i]);
     }
     newargs[cl->num_args + 1] = NULL;
 
-    for(int i = 0; i <= cl->num_args + 1; i++){
-        printf("  newargs[%d] = %s\n", i, newargs[i]);
-    }
+    // for(int i = 0; i <= cl->num_args + 1; i++){
+    //     printf("  newargs[%d] = %s\n", i, newargs[i]);
+    // }
 
-    // // fork()
+    // fork()
     int childStatus;
 
     pid_t spawnPid = fork();
@@ -306,42 +408,110 @@ void other_commands(struct CommandLine* cl){
             LAST_EXIT_STATUS = 1;
             exit(1); // is exit valid here?
             break;
-        case 0:
-            printf("Child Process %d is running\n", getpid());
-            
-            // execvp()
-            execvp(cl->command, newargs);
 
-            perror("failure to execvp()");
-            LAST_EXIT_STATUS = 1;
+        case 0:
+            // printf("Child Process %d is running\n", getpid());
+            
+            // if background set io to /dev/null
+            if(cl->is_background){
+                change_io("/dev/null", "/dev/null");
+            }
+            
+            int io_status = change_io(cl->input_file, cl->output_file); // if null then change_io ignores
+            
+            if (io_status == 0){
+                // execvp()
+                execvp(cl->command, newargs);
+                perror("failure to execvp()");
+            }
 
             for(int i = 0; i <= cl->num_args + 1; i++){
                 free(newargs[i]);
             }
             free(newargs);
             free_cl(cl);
-            exit(2);
+            exit(1);
             break;
 
         default:
-            printf("Parent Process %d is running\n", getpid());
-            spawnPid = waitpid(spawnPid, &childStatus, 0);
-            printf("back to the parent process %d\n", getpid());
-            LAST_EXIT_STATUS = childStatus;
+            // printf("Parent Process %d is running\n", getpid());
 
+            // if background print pid and parent return to prompt without waiting
+            // add pid to bg_array
+            if(cl->is_background){
+                printf("background pid is %d\n", spawnPid);
+                add_pid(bga, spawnPid);
+                return;
+            }
+
+            spawnPid = waitpid(spawnPid, &childStatus, 0);
+
+            // printf("back to the parent process %d\n", getpid());
+
+            // if foreground update last_exit_status
+            if (childStatus == 0){
+                LAST_EXIT_STATUS = 0;
+            }
+            else{
+                LAST_EXIT_STATUS = 1;
+            }
+            
             for(int i = 0; i <= cl->num_args + 1; i++){
                 free(newargs[i]);
             }
             free(newargs);
-            // exit(0);
             break;
     }
-    
-    // if background print pid and parent return to prompt without waiting
-    
-    // if foreground update last_exit_status
-    // kill child
 
-    printf("ran other_commands\n");
+    // printf("ran other_commands\n");
 }
 
+int change_io(char* input_file, char* output_file){ //currently does not free child newarg memory when exit() child process on error || solution: return an error int instead of exit()
+    if(input_file != NULL){
+        // run code
+        int sourceFD = open(input_file, O_RDONLY);
+        if (sourceFD == -1) {
+            perror("source open()"); 
+            return 1;
+        }
+        
+        int result = dup2(sourceFD, 0);
+        if (result == -1) { 
+            perror("source dup2()"); 
+            return 2;
+        }
+    }
+    if(output_file != NULL){
+        //run code
+        int targetFD = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (targetFD == -1) { 
+            perror("target open()"); 
+            return 3;
+        }
+
+        int result = dup2(targetFD, 1);
+        if (result == -1) { 
+            perror("target dup2()"); 
+            return 4;
+        }
+    }
+
+    return 0;
+}
+
+static void sigHandler(int sig){
+    if (sig == SIGINT){
+        // interrupt FG process
+        // display sigint interupt using write()
+        // change LAST_EXIT_STATUS
+        return;
+    }
+
+    else if (sig == SIGSTOP){
+        // call wait()
+        // set FG_MODE
+        // display an informative message using write()
+        // handle FG_MODE in function calls
+        return;
+    }
+}
