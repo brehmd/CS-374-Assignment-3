@@ -7,8 +7,8 @@
 #include <fcntl.h>
 #include <signal.h>
 
-int LAST_EXIT_STATUS = 0;
-int FG_MODE = 0;
+static volatile sig_atomic_t LAST_EXIT_STATUS = 0;
+static volatile sig_atomic_t FG_MODE = 0;
 
 struct BackgroundArray{
     pid_t* pids;
@@ -42,21 +42,48 @@ void built_in_cd(struct CommandLine*); //4. Execute 3 commands exit, cd, and sta
 void built_in_status(int); //4. Execute 3 commands exit, cd, and status via code built into the shell
 void other_commands(struct CommandLine*, struct BackgroundArray*); //5. Execute other commands by creating new processes using a function from the exec family of functions | 7. Support running commands in foreground and background processes
 int change_io(char*, char*); //6. Support input and output redirection
-static void sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
+static void parent_sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
+static void fg_sigHandler(int); //8. Implement custom handlers for 2 signals, SIGINT and SIGTSTP
 void print_cl(struct CommandLine*);
 void free_cl(struct CommandLine*);
 
+
+// handles all function calls and the loop of execution
 int main () {
 
-    // set up signal handler
+    // set up signal handlers
+    struct sigaction sa;
+    sa.sa_handler = SIG_IGN; // Ignore the signal
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("sigaction");
+        return 1;
+    }
+
+    sigset_t mask;
+    struct sigaction act = {0};
+
+    if (sigfillset(&mask) == -1) {
+        printf("Setting mask failed\n");
+        fflush(stdout);
+        return 0;
+    }
+
+    act.sa_handler = &parent_sigHandler;
+    act.sa_mask = mask;
+
+    if (sigaction(SIGTSTP, &act, NULL) == -1) {
+        printf("SIGTSTP handler registartion failed\n");
+        fflush(stdout);
+        return EXIT_FAILURE;
+    }
 
     // initialize bg_array
     struct BackgroundArray* bga = create_bga();
 
-    // int last_exit_status = 0; // this should be a global variable
     int keep_running = 1;
     while(keep_running){
-
 
         // check array of all background PIDs
         // https://stackoverflow.com/questions/4200373/just-check-status-process-in-c
@@ -76,9 +103,8 @@ int main () {
             }
             else if (return_pid == bga->pids[i]) {
                 printf("background pid %d is done: exit value %d\n", bga->pids[i], status);
+                fflush(stdout);
                 rm_pid(bga, bga->pids[i]);
-                
-                // free memory of newargs
             }
         }
 
@@ -89,7 +115,6 @@ int main () {
             continue;
         }
 
-        // more code
         if (strcmp(cl->command, "exit") == 0){
             built_in_exit(bga);
             keep_running = 0;
@@ -112,6 +137,8 @@ int main () {
     return 0;
 }
 
+
+// creates the array of background processes 
 struct BackgroundArray* create_bga(){
     struct BackgroundArray* bga = malloc(sizeof(struct BackgroundArray));
     bga->pids = calloc(3, sizeof(pid_t));
@@ -121,7 +148,7 @@ struct BackgroundArray* create_bga(){
 }
 
 
-
+// adds a value to the bga and dynamically allocates more memory if needed
 void add_pid(struct BackgroundArray* bga, pid_t pid){
     if (bga->size == bga->capacity){
         bga->capacity *= 2;
@@ -140,6 +167,7 @@ void add_pid(struct BackgroundArray* bga, pid_t pid){
     return;
 }
 
+// removes a value from the bga
 void rm_pid(struct BackgroundArray* bga, pid_t pid){
     for(int i = 0; i < bga->capacity; i++){
         if (bga->pids[i] == pid){
@@ -151,6 +179,7 @@ void rm_pid(struct BackgroundArray* bga, pid_t pid){
     return;
 }
 
+// frees all memory from the bga
 void free_bga(struct BackgroundArray* bga){
     free(bga->pids);
     bga->pids = NULL;
@@ -159,7 +188,7 @@ void free_bga(struct BackgroundArray* bga){
     return;
 }
 
-
+// used while debugging my code to print everything captured in the cl struct
 void print_cl(struct CommandLine* cl){
     if(cl == NULL){return;}
 
@@ -183,6 +212,7 @@ void print_cl(struct CommandLine* cl){
     return;
 }
 
+// frees all memory allocated in the cl struct
 void free_cl(struct CommandLine* cl){
     if (cl == NULL){
         return;
@@ -215,9 +245,11 @@ void free_cl(struct CommandLine* cl){
     return;
 }
 
+// Prompts the user for a command, parses it, and returns a CommandLine structure
 struct CommandLine* create_cl(){
     char user_entry[2048];
     printf(": ");
+    fflush(stdout);
     fgets(user_entry, sizeof(user_entry), stdin);
     user_entry[strcspn(user_entry, "\n")] = 0;
 
@@ -227,16 +259,18 @@ struct CommandLine* create_cl(){
 
     char* p_entry = user_entry;
 
+    // expands the cl string $$ to the current PID
     var_expand(&p_entry);
-    // printf("p_entry: %s\n", p_entry);
 
     struct CommandLine* cl = malloc(sizeof(struct CommandLine));
 
+    // first segment is the command string
     char* token = strtok(p_entry, " ");
 
     cl->command = calloc(strlen(token) +1, sizeof(char));
     strcpy(cl->command, token);
 
+    // next segment are the arguments
     int arg_num = 0;
     token = strtok(NULL, " ");
     while(token != NULL && *token != '<' && *token != '>' && *token != '&'){
@@ -250,6 +284,7 @@ struct CommandLine* create_cl(){
         cl->arguments[i] = NULL;
     }
 
+    // next segment is the file input
     if (token != NULL && *token == '<'){
         token = strtok(NULL, " ");
         cl->input_file = calloc(strlen(token) + 1, sizeof(char));
@@ -259,6 +294,7 @@ struct CommandLine* create_cl(){
     }
     else{cl->input_file = NULL; cl->is_input = 0;}
 
+    // next segment is the file output
     if (token != NULL && *token == '>'){
         token = strtok(NULL, " ");
         cl->output_file = calloc(strlen(token) + 1, sizeof(char));
@@ -268,6 +304,7 @@ struct CommandLine* create_cl(){
     }
     else{cl->output_file = NULL; cl->is_output = 0;}
 
+    // last grab if process is to be in background or not
     if (token != NULL && *token == '&'){
         cl->is_background = 1;
     }
@@ -280,6 +317,7 @@ struct CommandLine* create_cl(){
     return cl;
 }
 
+// expands every instance of $$ to the current PID
 void var_expand(char** string){
     const char *target = "$$";
 
@@ -334,7 +372,7 @@ void var_expand(char** string){
     *string = result; // Update the original pointer
 }
 
-
+// exits the program, but first kills all alive children processes
 void built_in_exit(struct BackgroundArray* bga){
     // terminate all children
     for (int i = 0; i < bga->capacity; i++){
@@ -347,42 +385,40 @@ void built_in_exit(struct BackgroundArray* bga){
     return;
 }
 
-
+// changes the current directory
 void built_in_cd(struct CommandLine* cl){
-    // printf("running built_in_cd\n");
     if (cl->num_args){
         if (chdir(cl->arguments[0]) == -1){
             printf("ERROR - %s is not a valid path name\n", cl->arguments[0]);
+            fflush(stdout);
         }
     }
     else{
         if (chdir(getenv("HOME")) == -1){
             printf("ERROR - cannot cd HOME\n");
+            fflush(stdout);
         }
     }
     // char cwd[1024];
     // getcwd(cwd, sizeof(cwd));
     // printf("Check cwd: %s\n", cwd);
-    // printf("ran built_in_cd\n");
 }
 
-
+// prints the last status of an exited process
 void built_in_status(int status){
-    // printf("running built_in_status\n");
-
-    // run some if statements to handle different status codes
-
-    printf("exit value %d\n", status);
-    // printf("ran built_in_status\n");
+    if (status == 2){
+        printf("terminated by signal 2\n");
+        fflush(stdout);
+    }
+    else{
+        printf("exit value 1\n");
+        fflush(stdout);
+    }
 }
 
-
+// Executes non-built-in commands, managing foreground and background processes
 void other_commands(struct CommandLine* cl, struct BackgroundArray* bga){
-    // printf("running other_commands\n");
-
-    // check background and foreground
-
-    // new arguments list
+    // new arguments list to be passed into execvp
     char** newargs = (char**)calloc(cl->num_args + 2, sizeof(char*));
 
     newargs[0] = (char*)malloc((strlen(cl->command) + 1) * sizeof(char));
@@ -393,28 +429,53 @@ void other_commands(struct CommandLine* cl, struct BackgroundArray* bga){
     }
     newargs[cl->num_args + 1] = NULL;
 
-    // for(int i = 0; i <= cl->num_args + 1; i++){
-    //     printf("  newargs[%d] = %s\n", i, newargs[i]);
-    // }
-
     // fork()
     int childStatus;
 
     pid_t spawnPid = fork();
 
+    // manage parent and child processes 
     switch(spawnPid){
         case -1:
             perror("failure to fork()\n");
             LAST_EXIT_STATUS = 1;
-            exit(1); // is exit valid here?
+            exit(1);
             break;
 
         case 0:
-            // printf("Child Process %d is running\n", getpid());
-            
-            // if background set io to /dev/null
-            if(cl->is_background){
+            ;
+            // this ignore does not work
+            struct sigaction sa = {0};
+            sa.sa_handler = SIG_IGN; // Ignore the signal
+            sa.sa_flags = SA_RESTART;
+
+            if (sigaction(SIGTSTP, &sa, NULL) == -1) {
+                perror("sigaction");
+                exit(1);
+            }
+
+            struct sigaction sa2 = {0};
+            sigset_t mask;
+
+            // if background set io to /dev/null and ignore interrupts
+            if(cl->is_background && FG_MODE == 0){
                 change_io("/dev/null", "/dev/null");
+            }
+            else{ // if foreground allow ^C
+                if (sigfillset(&mask) == -1) {
+                    printf("Setting mask failed\n");
+                    fflush(stdout);
+                    exit(1);
+                }
+
+                sa2.sa_handler = &fg_sigHandler;
+                sa2.sa_mask = mask;
+
+                if (sigaction(SIGINT, &sa2, NULL) == -1) {
+                    printf("SIGINT handler registartion failed\n");
+                    fflush(stdout);
+                    exit(1);
+                }
             }
             
             int io_status = change_io(cl->input_file, cl->output_file); // if null then change_io ignores
@@ -425,7 +486,8 @@ void other_commands(struct CommandLine* cl, struct BackgroundArray* bga){
                 perror("failure to execvp()");
             }
 
-            for(int i = 0; i <= cl->num_args + 1; i++){
+            // free memory on failure
+            for(int i = 0; i <= cl->num_args + 1; i++){ 
                 free(newargs[i]);
             }
             free(newargs);
@@ -434,41 +496,33 @@ void other_commands(struct CommandLine* cl, struct BackgroundArray* bga){
             break;
 
         default:
-            // printf("Parent Process %d is running\n", getpid());
+            // free argument memory
+            for(int i = 0; i <= cl->num_args + 1; i++){
+                free(newargs[i]);
+            }
+            free(newargs);
 
             // if background print pid and parent return to prompt without waiting
             // add pid to bg_array
-            if(cl->is_background){
+            if(cl->is_background && FG_MODE == 0){
                 printf("background pid is %d\n", spawnPid);
+                fflush(stdout);
                 add_pid(bga, spawnPid);
                 return;
             }
 
             spawnPid = waitpid(spawnPid, &childStatus, 0);
 
-            // printf("back to the parent process %d\n", getpid());
-
             // if foreground update last_exit_status
-            if (childStatus == 0){
-                LAST_EXIT_STATUS = 0;
-            }
-            else{
-                LAST_EXIT_STATUS = 1;
-            }
-            
-            for(int i = 0; i <= cl->num_args + 1; i++){
-                free(newargs[i]);
-            }
-            free(newargs);
+            if (childStatus == 2){built_in_status(2);}
+            LAST_EXIT_STATUS = childStatus;
             break;
     }
-
-    // printf("ran other_commands\n");
 }
 
-int change_io(char* input_file, char* output_file){ //currently does not free child newarg memory when exit() child process on error || solution: return an error int instead of exit()
+// changes io direction if strings are not NULL
+int change_io(char* input_file, char* output_file){
     if(input_file != NULL){
-        // run code
         int sourceFD = open(input_file, O_RDONLY);
         if (sourceFD == -1) {
             perror("source open()"); 
@@ -482,7 +536,6 @@ int change_io(char* input_file, char* output_file){ //currently does not free ch
         }
     }
     if(output_file != NULL){
-        //run code
         int targetFD = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (targetFD == -1) { 
             perror("target open()"); 
@@ -499,19 +552,28 @@ int change_io(char* input_file, char* output_file){ //currently does not free ch
     return 0;
 }
 
-static void sigHandler(int sig){
-    if (sig == SIGINT){
-        // interrupt FG process
-        // display sigint interupt using write()
-        // change LAST_EXIT_STATUS
-        return;
-    }
+// handles SIGTSTP in the parent function
+static void parent_sigHandler(int sig){
+    if (sig == SIGTSTP){
 
-    else if (sig == SIGSTOP){
-        // call wait()
-        // set FG_MODE
-        // display an informative message using write()
-        // handle FG_MODE in function calls
-        return;
+        if (FG_MODE == 0){
+            const char* message = "\nEntering foreground-only mode (& is now ignored)\n";
+            write(STDOUT_FILENO, message, 50);
+            fflush(stdout);
+            FG_MODE = 1;
+        }
+        else if (FG_MODE == 1){
+            const char* message = "\nExiting foreground-only mode\n";
+            write(STDOUT_FILENO, message, 30);
+            fflush(stdout);
+            FG_MODE = 0;
+        }
+    }
+}
+
+// Handles SIGINT in the child process and passes SIGINT as exit
+static void fg_sigHandler(int sig){
+    if (sig == SIGINT){
+        exit(SIGINT);
     }
 }
